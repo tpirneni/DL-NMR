@@ -1,2 +1,2 @@
 # DL-NMR
-Optimizing Neural Network-based Quantification for NMR Metabolomics
+Repository for "Optimizing Neural Network-based Quantification for NMR Metabolomics"
