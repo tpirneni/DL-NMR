@@ -1,7 +1,7 @@
 # Repository for "Optimizing Neural Network-based Quantification for NMR Metabolomics"
-# -------------------------------------------------------------------------
+# ----------------------------------------------------------------
 # Below are two demos. The first demonstrates generating synthetic mixture spectra from simulated metabolite spectra, and the second demonstrates using a transformer neural network for metabolite quantification in synthetic spectra.
-# -------------------------------------------------------------------------
+# ----------------------------------------------------------------
 
 # The following demo demonstrates generating synthetic metabolite mixture NMR spectra for testing a neural network trained for metabolite quantification. Spectra are generated using a uniform concentration distribution ranging from 0.05 to 20 mM.
 
@@ -269,3 +269,354 @@ for i in np.arange(4):
 ![output_17_2](https://github.com/user-attachments/assets/0d0c8fd0-12ea-4d31-b7a4-4d0096e18e3a)
 ![output_17_1](https://github.com/user-attachments/assets/22213841-3ae7-4c16-895c-56c5160dd0bd)
 ![output_17_0](https://github.com/user-attachments/assets/77f42f1b-d1ca-4058-be93-2c2bdd3a84bb)
+
+
+# ----------------------------------------------------------------
+
+# Test a transformer neural network for metabolite quantification in synthetic NMR spectra 
+
+## First load dependencies, the model, the parameters, and the testing spectra (synthesized in the data generation demo).
+
+#### Import dependencies
+
+
+```python
+import numpy as np
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import copy
+```
+
+#### Define the transformer model
+
+
+```python
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.d_model = d_model
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        return x + self.pe[:x.size(0), :]
+
+class Transformer(nn.Module):
+    def __init__(self, input_dim, d_model, nhead, num_encoder_layers, dim_feedforward, dropout=0.1):
+        super(Transformer, self).__init__()
+        self.input_dim = input_dim
+        self.d_model = d_model
+        self.embedding = nn.Linear(input_dim, d_model)
+        self.positional_encoding = PositionalEncoding(d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward, dropout=dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+        self.decoder = nn.Linear(23552, 44)
+
+    def forward(self, x):
+        # Binning
+        batch_size, seq_length = x.size()
+        num_bins = seq_length // self.input_dim
+        x = x.view(batch_size, num_bins, self.input_dim)  # (batch_size, num_bins, input_dim)
+        
+        # Embedding
+        x = self.embedding(x)  # (batch_size, num_bins, d_model)
+        
+        # Add positional encoding
+        x = self.positional_encoding(x)
+        
+        # Transformer Encoder
+        x = x.permute(1, 0, 2)  # (num_bins, batch_size, d_model)
+        x = self.transformer_encoder(x)  # (num_bins, batch_size, d_model)
+        x = x.permute(1, 0, 2)  # (batch_size, num_bins, d_model)
+        
+        # Reconstruct original sequence
+        x = x.reshape(batch_size, num_bins * d_model)
+        
+        # Decoding
+        x = self.decoder(x)  # (batch_size, output_dim)
+        
+        return x
+
+# Parameters
+input_dim = 1000  # Size of each bin
+d_model = 512     # Embedding dimension
+nhead = 1         # Number of attention heads
+num_encoder_layers = 1  # Number of transformer encoder layers
+dim_feedforward = 2048  # Feedforward dimension
+dropout = 0.0     # Dropout rate
+```
+
+#### Define model loading function
+
+
+```python
+def train_or_load_model(model, train_loader, test_loader, num_epochs, save_path):
+    train_losses = []
+    test_losses = []
+    is_model_trained = False  # Initialize flag
+
+    if os.path.isfile(save_path):
+        print("Loading pretrained model from {}".format(save_path))
+        checkpoint = torch.load(save_path)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer = optim.Adam(model.parameters())  
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    else:
+        print("No pretrained model found.")
+       
+    return train_losses, test_losses, is_model_trained  # Return the losses and flag
+```
+
+#### Load testing dataset
+
+
+```python
+# Switch to directory containing datasets
+os.chdir('/DL-NMR/TestSpectra')
+
+# Load tesing dataset
+spectraTest = np.load(f'Dataset44_Uniform_Test_Spec.npy')
+concTest = np.load(f'Dataset44_Uniform_Test_Conc.npy')
+```
+
+#### Load the model and parameters determined in training
+
+
+```python
+# Switch to directory for saving model parameters
+os.chdir('/DL-NMR/SavedParamsAndTrainingMetrics')
+
+# Define the path where you saved your model parameters
+save_path = 'Transformer_44met_UniformDist_TrainingAndValidation_ForManuscript_1000ep_Params.pt'
+
+# Load the entire dictionary from the saved file
+checkpoint = torch.load(save_path)
+
+# Instantiate the model
+NMR_Transformer = Transformer(input_dim, d_model, nhead, num_encoder_layers, dim_feedforward, dropout)
+
+# Load the model's state dictionary from the loaded dictionary
+NMR_Transformer.load_state_dict(checkpoint['model_state_dict'])
+```
+
+
+
+
+    <All keys matched successfully>
+
+
+
+## Apply the trained model to the testing spectra
+
+#### Compute MAPE on the first 25 spectra in the testing set
+
+
+```python
+## Compute absolute percent error statistics on validation set
+
+APEs = []
+MAPEs = []
+Predictions = []
+
+for i in np.arange(25):
+    GroundTruth = concTest[i]
+    NMR_Transformer.eval()
+    Prediction = NMR_Transformer(torch.tensor(spectraTest[i], dtype=torch.float32).unsqueeze(0))
+
+    # Reformat
+    Prediction = Prediction.detach().numpy()
+
+     # Calculate absolute percent error (APE) for each metabolite
+    APE = np.abs((GroundTruth - Prediction) / GroundTruth) * 100 
+
+    # Calculate mean absolute percent error (MAPE)
+    MAPE = np.mean(APE)
+    
+    Predictions.append(Prediction)
+    APEs.append(APE)
+    MAPEs.append(MAPE)
+
+print('Overall MAPE: ',np.array(MAPEs).mean().round(2))
+```
+
+    Overall MAPE:  1.47
+
+
+#### Display ground truth and predicted concentrations for several samples
+
+
+```python
+sample = 0
+
+for i in np.arange (44):
+    print("Ground Truth: ", concTest[sample][i].round(2), 
+          ";  Prediction: ", Predictions[sample][0][i].round(2), 
+          ";  Precent Error: " ,APEs[sample][0][i].round(2))
+```
+
+    Ground Truth:  18.63 ;  Prediction:  18.6 ;  Precent Error:  0.18
+    Ground Truth:  8.41 ;  Prediction:  8.41 ;  Precent Error:  0.01
+    Ground Truth:  13.98 ;  Prediction:  14.05 ;  Precent Error:  0.52
+    Ground Truth:  5.34 ;  Prediction:  5.32 ;  Precent Error:  0.33
+    Ground Truth:  13.66 ;  Prediction:  13.73 ;  Precent Error:  0.47
+    Ground Truth:  3.69 ;  Prediction:  3.77 ;  Precent Error:  2.17
+    Ground Truth:  10.93 ;  Prediction:  10.84 ;  Precent Error:  0.8
+    Ground Truth:  1.6 ;  Prediction:  1.54 ;  Precent Error:  3.41
+    Ground Truth:  5.76 ;  Prediction:  5.72 ;  Precent Error:  0.68
+    Ground Truth:  2.55 ;  Prediction:  2.5 ;  Precent Error:  1.88
+    Ground Truth:  4.44 ;  Prediction:  4.43 ;  Precent Error:  0.27
+    Ground Truth:  7.0 ;  Prediction:  6.96 ;  Precent Error:  0.61
+    Ground Truth:  9.38 ;  Prediction:  9.39 ;  Precent Error:  0.2
+    Ground Truth:  10.11 ;  Prediction:  10.15 ;  Precent Error:  0.41
+    Ground Truth:  19.82 ;  Prediction:  19.82 ;  Precent Error:  0.01
+    Ground Truth:  14.02 ;  Prediction:  14.0 ;  Precent Error:  0.11
+    Ground Truth:  4.35 ;  Prediction:  4.36 ;  Precent Error:  0.31
+    Ground Truth:  11.35 ;  Prediction:  11.28 ;  Precent Error:  0.59
+    Ground Truth:  7.08 ;  Prediction:  7.02 ;  Precent Error:  0.82
+    Ground Truth:  19.08 ;  Prediction:  18.99 ;  Precent Error:  0.43
+    Ground Truth:  18.96 ;  Prediction:  18.96 ;  Precent Error:  0.01
+    Ground Truth:  8.13 ;  Prediction:  8.19 ;  Precent Error:  0.75
+    Ground Truth:  8.63 ;  Prediction:  8.73 ;  Precent Error:  1.13
+    Ground Truth:  19.41 ;  Prediction:  19.45 ;  Precent Error:  0.2
+    Ground Truth:  14.13 ;  Prediction:  14.15 ;  Precent Error:  0.15
+    Ground Truth:  5.86 ;  Prediction:  5.89 ;  Precent Error:  0.37
+    Ground Truth:  15.24 ;  Prediction:  15.21 ;  Precent Error:  0.19
+    Ground Truth:  8.83 ;  Prediction:  8.82 ;  Precent Error:  0.1
+    Ground Truth:  11.07 ;  Prediction:  11.17 ;  Precent Error:  0.88
+    Ground Truth:  16.64 ;  Prediction:  16.69 ;  Precent Error:  0.29
+    Ground Truth:  14.57 ;  Prediction:  14.61 ;  Precent Error:  0.27
+    Ground Truth:  5.39 ;  Prediction:  5.41 ;  Precent Error:  0.27
+    Ground Truth:  7.27 ;  Prediction:  7.32 ;  Precent Error:  0.63
+    Ground Truth:  9.94 ;  Prediction:  9.9 ;  Precent Error:  0.43
+    Ground Truth:  8.24 ;  Prediction:  8.22 ;  Precent Error:  0.16
+    Ground Truth:  2.26 ;  Prediction:  2.3 ;  Precent Error:  1.62
+    Ground Truth:  12.94 ;  Prediction:  12.99 ;  Precent Error:  0.36
+    Ground Truth:  4.3 ;  Prediction:  4.27 ;  Precent Error:  0.64
+    Ground Truth:  11.85 ;  Prediction:  11.93 ;  Precent Error:  0.7
+    Ground Truth:  17.63 ;  Prediction:  17.59 ;  Precent Error:  0.24
+    Ground Truth:  9.54 ;  Prediction:  9.57 ;  Precent Error:  0.31
+    Ground Truth:  15.97 ;  Prediction:  16.0 ;  Precent Error:  0.19
+    Ground Truth:  4.32 ;  Prediction:  4.35 ;  Precent Error:  0.72
+    Ground Truth:  6.93 ;  Prediction:  7.02 ;  Precent Error:  1.34
+
+
+
+```python
+sample = 1
+
+for i in np.arange (44):
+    print("Ground Truth: ", concTest[sample][i].round(2), 
+          ";  Prediction: ", Predictions[sample][0][i].round(2), 
+          ";  Precent Error: " ,APEs[sample][0][i].round(2))
+```
+
+    Ground Truth:  8.55 ;  Prediction:  8.49 ;  Precent Error:  0.76
+    Ground Truth:  5.44 ;  Prediction:  5.37 ;  Precent Error:  1.34
+    Ground Truth:  16.68 ;  Prediction:  16.77 ;  Precent Error:  0.53
+    Ground Truth:  14.05 ;  Prediction:  14.13 ;  Precent Error:  0.56
+    Ground Truth:  9.13 ;  Prediction:  9.22 ;  Precent Error:  1.01
+    Ground Truth:  13.26 ;  Prediction:  13.33 ;  Precent Error:  0.48
+    Ground Truth:  7.53 ;  Prediction:  7.44 ;  Precent Error:  1.28
+    Ground Truth:  12.52 ;  Prediction:  12.48 ;  Precent Error:  0.39
+    Ground Truth:  17.71 ;  Prediction:  17.73 ;  Precent Error:  0.1
+    Ground Truth:  4.58 ;  Prediction:  4.56 ;  Precent Error:  0.35
+    Ground Truth:  8.54 ;  Prediction:  8.53 ;  Precent Error:  0.08
+    Ground Truth:  8.02 ;  Prediction:  8.01 ;  Precent Error:  0.12
+    Ground Truth:  9.55 ;  Prediction:  9.61 ;  Precent Error:  0.58
+    Ground Truth:  9.83 ;  Prediction:  9.85 ;  Precent Error:  0.23
+    Ground Truth:  3.59 ;  Prediction:  3.57 ;  Precent Error:  0.51
+    Ground Truth:  9.36 ;  Prediction:  9.31 ;  Precent Error:  0.52
+    Ground Truth:  7.33 ;  Prediction:  7.3 ;  Precent Error:  0.44
+    Ground Truth:  15.29 ;  Prediction:  15.21 ;  Precent Error:  0.5
+    Ground Truth:  4.06 ;  Prediction:  4.03 ;  Precent Error:  0.7
+    Ground Truth:  6.52 ;  Prediction:  6.47 ;  Precent Error:  0.7
+    Ground Truth:  3.75 ;  Prediction:  3.76 ;  Precent Error:  0.22
+    Ground Truth:  17.05 ;  Prediction:  17.14 ;  Precent Error:  0.51
+    Ground Truth:  13.16 ;  Prediction:  13.23 ;  Precent Error:  0.51
+    Ground Truth:  7.93 ;  Prediction:  7.89 ;  Precent Error:  0.43
+    Ground Truth:  4.93 ;  Prediction:  4.92 ;  Precent Error:  0.34
+    Ground Truth:  6.03 ;  Prediction:  6.09 ;  Precent Error:  1.02
+    Ground Truth:  17.69 ;  Prediction:  17.7 ;  Precent Error:  0.07
+    Ground Truth:  10.91 ;  Prediction:  11.01 ;  Precent Error:  0.92
+    Ground Truth:  4.76 ;  Prediction:  4.77 ;  Precent Error:  0.26
+    Ground Truth:  3.0 ;  Prediction:  3.08 ;  Precent Error:  2.89
+    Ground Truth:  8.04 ;  Prediction:  8.05 ;  Precent Error:  0.17
+    Ground Truth:  17.46 ;  Prediction:  17.46 ;  Precent Error:  0.01
+    Ground Truth:  3.6 ;  Prediction:  3.58 ;  Precent Error:  0.57
+    Ground Truth:  16.8 ;  Prediction:  16.87 ;  Precent Error:  0.42
+    Ground Truth:  1.32 ;  Prediction:  1.3 ;  Precent Error:  1.44
+    Ground Truth:  6.37 ;  Prediction:  6.39 ;  Precent Error:  0.25
+    Ground Truth:  4.35 ;  Prediction:  4.34 ;  Precent Error:  0.2
+    Ground Truth:  7.55 ;  Prediction:  7.51 ;  Precent Error:  0.59
+    Ground Truth:  19.05 ;  Prediction:  19.1 ;  Precent Error:  0.25
+    Ground Truth:  16.09 ;  Prediction:  16.09 ;  Precent Error:  0.01
+    Ground Truth:  8.69 ;  Prediction:  8.75 ;  Precent Error:  0.66
+    Ground Truth:  8.51 ;  Prediction:  8.54 ;  Precent Error:  0.34
+    Ground Truth:  0.89 ;  Prediction:  0.9 ;  Precent Error:  0.61
+    Ground Truth:  18.31 ;  Prediction:  18.43 ;  Precent Error:  0.61
+
+
+
+```python
+sample = 2
+
+for i in np.arange (44):
+    print("Ground Truth: ", concTest[sample][i].round(2), 
+          ";  Prediction: ", Predictions[sample][0][i].round(2), 
+          ";  Precent Error: " ,APEs[sample][0][i].round(2))
+```
+
+    Ground Truth:  8.09 ;  Prediction:  8.0 ;  Precent Error:  1.22
+    Ground Truth:  19.94 ;  Prediction:  19.88 ;  Precent Error:  0.31
+    Ground Truth:  15.14 ;  Prediction:  15.22 ;  Precent Error:  0.55
+    Ground Truth:  2.71 ;  Prediction:  2.65 ;  Precent Error:  2.09
+    Ground Truth:  9.28 ;  Prediction:  9.31 ;  Precent Error:  0.28
+    Ground Truth:  16.98 ;  Prediction:  17.1 ;  Precent Error:  0.69
+    Ground Truth:  3.91 ;  Prediction:  3.81 ;  Precent Error:  2.78
+    Ground Truth:  10.04 ;  Prediction:  10.03 ;  Precent Error:  0.09
+    Ground Truth:  3.71 ;  Prediction:  3.7 ;  Precent Error:  0.25
+    Ground Truth:  12.04 ;  Prediction:  12.1 ;  Precent Error:  0.55
+    Ground Truth:  2.76 ;  Prediction:  2.78 ;  Precent Error:  0.62
+    Ground Truth:  1.76 ;  Prediction:  1.78 ;  Precent Error:  0.89
+    Ground Truth:  4.19 ;  Prediction:  3.87 ;  Precent Error:  7.5
+    Ground Truth:  12.78 ;  Prediction:  12.76 ;  Precent Error:  0.16
+    Ground Truth:  15.76 ;  Prediction:  15.81 ;  Precent Error:  0.35
+    Ground Truth:  8.33 ;  Prediction:  8.3 ;  Precent Error:  0.3
+    Ground Truth:  11.22 ;  Prediction:  11.22 ;  Precent Error:  0.03
+    Ground Truth:  17.31 ;  Prediction:  17.54 ;  Precent Error:  1.33
+    Ground Truth:  3.37 ;  Prediction:  3.32 ;  Precent Error:  1.5
+    Ground Truth:  16.96 ;  Prediction:  16.89 ;  Precent Error:  0.42
+    Ground Truth:  14.4 ;  Prediction:  14.49 ;  Precent Error:  0.61
+    Ground Truth:  1.04 ;  Prediction:  1.06 ;  Precent Error:  2.41
+    Ground Truth:  5.84 ;  Prediction:  5.9 ;  Precent Error:  1.09
+    Ground Truth:  7.08 ;  Prediction:  7.06 ;  Precent Error:  0.24
+    Ground Truth:  9.73 ;  Prediction:  9.69 ;  Precent Error:  0.36
+    Ground Truth:  10.4 ;  Prediction:  10.55 ;  Precent Error:  1.42
+    Ground Truth:  8.32 ;  Prediction:  8.35 ;  Precent Error:  0.27
+    Ground Truth:  10.06 ;  Prediction:  10.09 ;  Precent Error:  0.28
+    Ground Truth:  19.65 ;  Prediction:  19.79 ;  Precent Error:  0.72
+    Ground Truth:  12.88 ;  Prediction:  12.92 ;  Precent Error:  0.29
+    Ground Truth:  7.32 ;  Prediction:  7.35 ;  Precent Error:  0.39
+    Ground Truth:  12.77 ;  Prediction:  12.8 ;  Precent Error:  0.22
+    Ground Truth:  9.78 ;  Prediction:  9.88 ;  Precent Error:  1.0
+    Ground Truth:  18.96 ;  Prediction:  18.98 ;  Precent Error:  0.13
+    Ground Truth:  19.52 ;  Prediction:  19.58 ;  Precent Error:  0.29
+    Ground Truth:  9.31 ;  Prediction:  9.37 ;  Precent Error:  0.66
+    Ground Truth:  12.63 ;  Prediction:  12.67 ;  Precent Error:  0.31
+    Ground Truth:  18.77 ;  Prediction:  18.72 ;  Precent Error:  0.3
+    Ground Truth:  13.37 ;  Prediction:  13.43 ;  Precent Error:  0.41
+    Ground Truth:  4.19 ;  Prediction:  4.2 ;  Precent Error:  0.24
+    Ground Truth:  10.99 ;  Prediction:  10.97 ;  Precent Error:  0.17
+    Ground Truth:  4.98 ;  Prediction:  4.97 ;  Precent Error:  0.14
+    Ground Truth:  10.3 ;  Prediction:  10.27 ;  Precent Error:  0.31
+    Ground Truth:  10.04 ;  Prediction:  10.15 ;  Precent Error:  1.1
+
+
+
