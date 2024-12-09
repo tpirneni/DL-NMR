@@ -31,12 +31,16 @@ def exponential_apodization(input_array, apodization_frequency):
 
 #### Read in simulated spectra of 44 metabolites downloaded from HMDB, and create a ppm scale
 
+```python
+# Set a root directory
+root_dir = ("path/to/root_directory")
+```
 
 ```python
 # Load spectra of simulated standards to be analytes
-filenames = os.listdir('/DL-NMR/HMDBSpectraFiles/87Met')  # Get a list of filenames in the directory
+filenames = os.listdir(root_dir+'/DL-NMR/HMDBSpectraFiles/87Met')  # Get a list of filenames in the directory
 filenames = filenames[:43]
-os.chdir("/DL-NMR/HMDBSpectraFiles/87Met")  # Switch to appropriate folders and load data
+os.chdir(root_dir+"/DL-NMR/HMDBSpectraFiles/87Met")  # Switch to appropriate folders and load data
 
 standardsSpec =[]  # initialize variable to hold spectra of standards
 standardsDictionary = []  # initialize variable to hold dictionaries of spectra of standards
@@ -56,13 +60,13 @@ ppm = ppm_all[10000:56000]
 
 ```python
 # Load quantitative reference signal
-os.chdir("/DL-NMR/HMDBSpectraFiles")
+os.chdir(root_dir+"/DL-NMR/HMDBSpectraFiles")
 vd, v = ng.jcampdx.read('HMDB0000176_142710_predicted_H_400.jdx') # maleic acid, our quantitative reference
 v = ng.process.proc_base.cs(v, 28305)  # Shift maleic acid peak to 0 ppm to simulate a TSP peak (need to find good simulated TSP peak)
 
 
 # Define signal for a generic singlet for use as interfering signal (using acetic acid singlet from HMDB)
-os.chdir("/DL-NMR/HMDBSpectraFiles/87Met")  # Switch to appropriate folders and load data
+os.chdir(root_dir+"/DL-NMR/HMDBSpectraFiles/87Met")  # Switch to appropriate folders and load data
 vXd, vX = ng.jcampdx.read('HMDB0000042_5433_predicted_H_400.jdx') # acetic acid, for adding random singlets
 Singlet = vX[vX != 0]  # make variable of acetic acid without zeros
 ```
@@ -121,7 +125,7 @@ plt.xlim([ppm_all[0],ppm_all[-1]])
 ## Use linear combinations with physically inspired modifications (line-broadening, noise, baseline shift, and peak shift) 
 
 ## Switch to folder where datasets will be saved
-os.chdir('/DL-NMR/GeneratedDataAndVariables')
+os.chdir(root_dir+'/DL-NMR/GeneratedDataAndVariables')
 
 # Create some empty lists to contain spectra/concentrations as they are generated, and set some variables for the data generation function
 spectra = []
@@ -376,10 +380,14 @@ def train_or_load_model(model, train_loader, test_loader, num_epochs, save_path)
 
 #### Load testing dataset
 
+```python
+# Set a root directory
+root_dir = ("path/to/root_directory")
+```
 
 ```python
 # Switch to directory containing datasets
-os.chdir('/DL-NMR/TestSpectra')
+os.chdir(root_dir+'/DL-NMR/TestSpectra')
 
 # Load tesing dataset
 spectraTest = np.load(f'Dataset44_Uniform_Test_Spec.npy')
@@ -391,7 +399,7 @@ concTest = np.load(f'Dataset44_Uniform_Test_Conc.npy')
 
 ```python
 # Switch to directory for saving model parameters
-os.chdir('/DL-NMR/SavedParamsAndTrainingMetrics')
+os.chdir(root_dir+'/DL-NMR/SavedParamsAndTrainingMetrics')
 
 # Define the path where you saved your model parameters
 save_path = 'Transformer_44met_UniformDist_TrainingAndValidation_ForManuscript_1000ep_Params.pt'
