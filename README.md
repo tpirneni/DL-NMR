@@ -1,7 +1,8 @@
 # Repository for "Optimizing Neural Network-based Quantification for NMR Metabolomics"
-# ----------------------------------------------------------------
-# Below are two demos. The first demonstrates generating synthetic mixture spectra from simulated metabolite spectra, and the second demonstrates using a transformer neural network for metabolite quantification in synthetic spectra.
-# ----------------------------------------------------------------
+# -----------------------------------------------------------
+# Below are two demos. 
+# The first demonstrates generating synthetic mixture spectra from simulated metabolite spectra, and the second demonstrates using a transformer neural network for metabolite quantification in synthetic spectra.
+# -----------------------------------------------------------
 
 # The following demo demonstrates generating synthetic metabolite mixture NMR spectra for testing a neural network trained for metabolite quantification. Spectra are generated using a uniform concentration distribution ranging from 0.05 to 20 mM.
 
@@ -266,7 +267,7 @@ for i in np.arange(4):
     plt.plot(ppm, spectra[i])
     plt.xlim([ppm[0],ppm[-1]])  # Ensure ppm axis is oriented correctly
     plt.show()
-# -------------------------------------------------------------------------
+# -----------------------------------------------------------
 ```
 
 ![output_17_3](https://github.com/user-attachments/assets/d3fa9499-4aa4-4d8c-986d-7f1aaa1e43ba)
@@ -275,7 +276,7 @@ for i in np.arange(4):
 ![output_17_0](https://github.com/user-attachments/assets/77f42f1b-d1ca-4058-be93-2c2bdd3a84bb)
 
 
-# ----------------------------------------------------------------
+# -----------------------------------------------------------
 
 # Test a transformer neural network for metabolite quantification in synthetic NMR spectra 
 
